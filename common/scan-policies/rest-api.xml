@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  ZAP Scan Policy - REST APIs
+  Import via: Analyse > Scan Policy Manager > Import
+
+  Tuned for Bearer-token-authenticated REST APIs:
+    - Cookie/browser rules disabled (APIs use Authorization headers, not cookies)
+    - CSRF disabled (Bearer token auth already mitigates CSRF)
+    - Cache-control threshold lowered (noisy for REST APIs)
+
+  Keep this file in sync with the policyDefinition blocks in each automation.yaml.
+  Rule IDs: https://www.zaproxy.org/docs/alerts/
+-->
+<configuration>
+  <policy>
+    <name>rest-api</name>
+    <scanner>
+      <level>MEDIUM</level>
+      <strength>MEDIUM</strength>
+    </scanner>
+    <plugins>
+      <!-- Cookie security: not applicable, APIs use Authorization headers -->
+      <plugin><id>10010</id><enabled>false</enabled></plugin>
+      <plugin><id>10011</id><enabled>false</enabled></plugin>
+      <plugin><id>10054</id><enabled>false</enabled></plugin>
+      <!-- Browser/HTML headers: not applicable to REST APIs -->
+      <plugin><id>10020</id><enabled>false</enabled></plugin>
+      <plugin><id>10038</id><enabled>false</enabled></plugin>
+      <plugin><id>10055</id><enabled>false</enabled></plugin>
+      <plugin><id>10040</id><enabled>false</enabled></plugin>
+      <plugin><id>10017</id><enabled>false</enabled></plugin>
+      <!-- CSRF: mitigated by Bearer token auth -->
+      <plugin><id>20012</id><enabled>false</enabled></plugin>
+    </plugins>
+  </policy>
+</configuration>

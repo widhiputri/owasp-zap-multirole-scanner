@@ -1,0 +1,28 @@
+version: '3.8'
+
+# Spin up OWASP Juice Shop for local security scanning.
+# Dev and staging run as separate containers so both environments
+# can be scanned without restarting.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose down
+
+services:
+  juice-shop-dev:
+    image: bkimminich/juice-shop:latest
+    container_name: juice-shop-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=unsafe
+    restart: unless-stopped
+
+  juice-shop-staging:
+    image: bkimminich/juice-shop:latest
+    container_name: juice-shop-staging
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=unsafe
+    restart: unless-stopped

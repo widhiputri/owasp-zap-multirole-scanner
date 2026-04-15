@@ -1,0 +1,208 @@
+---
+# ZAP Automation Framework - Juice Shop Security Scan
+# Docs: https://www.zaproxy.org/docs/automate/automation-framework/
+#
+# Scan phases:
+#   0. Passive scan config
+#   1. Import OpenAPI spec
+#   2. Passive scan wait
+#   3. Active scan - admin role        (scan 0)
+#   4. Active scan - customer role     (scan 1)
+#   5. Active scan - unauthenticated   (scan 2)
+#   6. Active scan - invalid token     (scan 3)
+#   7. Alert filters
+#   8. Reports: HTML, JSON, SARIF
+
+env:
+  contexts:
+    - name: juice-shop
+      urls:
+        - "${base_url}"
+      includePaths:
+        - "${base_url}/api/.*"
+        - "${base_url}/rest/.*"
+
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+  vars:
+    base_url: ""
+    admin_token: ""
+    customer_token: ""
+    report_timestamp: ""
+
+jobs:
+  # 0. Passive scan config - suppress rules not applicable to REST APIs
+  - type: passiveScan-config
+    name: passiveScan-config
+    parameters:
+      maxAlertsPerRule: 10
+      scanOnlyInScope: true
+    rules:
+      # Cookie security: APIs use Authorization headers, not cookies
+      - id: 10010
+        name: "Cookie No HttpOnly Flag"
+        threshold: off
+      - id: 10011
+        name: "Cookie Without Secure Flag"
+        threshold: off
+      - id: 10054
+        name: "Cookie Without SameSite Attribute"
+        threshold: off
+      # Browser/HTML headers: not applicable to REST APIs
+      - id: 10020
+        name: "Anti-clickjacking Header"
+        threshold: off
+      - id: 10038
+        name: "Content Security Policy Header Not Set"
+        threshold: off
+      - id: 10055
+        name: "CSP Scanner"
+        threshold: off
+      - id: 10040
+        name: "Secure Pages Include Mixed Content"
+        threshold: off
+      - id: 10017
+        name: "Cross-Domain JavaScript Source File Inclusion"
+        threshold: off
+      # Cache-control: lower threshold for REST APIs
+      - id: 10015
+        name: "Incomplete or No Cache-control Header Set"
+        threshold: low
+
+  # 1. Inject admin token
+  - type: replacer
+    name: set-admin-token
+    parameters:
+      deleteAllRules: true
+    rules:
+      - description: "Inject admin Bearer token"
+        matchType: req_header
+        matchString: "Authorization"
+        matchRegex: false
+        replacementString: "Bearer ${admin_token}"
+
+  # 2. Import OpenAPI spec
+  - type: openapi
+    name: import-openapi-spec
+    parameters:
+      apiFile: "specs/openapi.json"
+      context: juice-shop
+      targetUrl: "${base_url}"
+
+  # 3. Wait for passive scan to complete
+  - type: passiveScan-wait
+    name: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  # 4. Active scan as admin (scan 0)
+  - type: activeScan
+    name: activeScan-admin
+    parameters:
+      context: juice-shop
+      maxScanDurationInMins: 20
+    policyDefinition:
+      defaultStrength: Medium
+      defaultThreshold: Medium
+
+  # 5. Active scan as customer (scan 1)
+  # Customer token is injected by run-scan.ps1 via ZAP API when admin scan ends.
+  - type: activeScan
+    name: activeScan-customer
+    parameters:
+      context: juice-shop
+      maxScanDurationInMins: 20
+    policyDefinition:
+      defaultStrength: Medium
+      defaultThreshold: Medium
+
+  # 6. Remove all tokens for unauthenticated scan
+  # Verifies that protected endpoints reject requests with no Authorization header.
+  - type: replacer
+    name: set-no-token
+    parameters:
+      deleteAllRules: true
+    rules: []
+
+  # 7. Active scan without authentication (scan 2)
+  - type: activeScan
+    name: activeScan-unauthenticated
+    parameters:
+      context: juice-shop
+      maxScanDurationInMins: 20
+    policyDefinition:
+      defaultStrength: Medium
+      defaultThreshold: Medium
+
+  # 8. Inject invalid token - tests server-side JWT validation
+  # A well-formed JWT with a bogus signature and exp=1 (expired 1970).
+  # All protected endpoints should return 401. Any 200 = auth bypass (critical).
+  # Any 500 = potential error leak.
+  - type: replacer
+    name: set-invalid-token
+    parameters:
+      deleteAllRules: true
+    rules:
+      - description: "Inject invalid Bearer token"
+        matchType: req_header
+        matchString: "Authorization"
+        matchRegex: false
+        replacementString: "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ6YXAtdGVzdCIsImV4cCI6MX0.INVALIDSIGNATURE"
+
+  # 9. Active scan with invalid token (scan 3)
+  # Shorter duration - expecting 401s across the board; deviations are the finding.
+  - type: activeScan
+    name: activeScan-invalid-token
+    parameters:
+      context: juice-shop
+      maxScanDurationInMins: 10
+    policyDefinition:
+      defaultStrength: Medium
+      defaultThreshold: Medium
+
+  # 10. Alert filters
+  - type: alertFilter
+    name: alert-filters
+    alertFilters:
+      # HSTS not set: informational for local dev targets, not a real vulnerability
+      - ruleId: 10004
+        newRisk: "False Positive"
+      # Sensitive data in URL: IDs in REST paths are by design (e.g. /rest/basket/1)
+      - ruleId: 10024
+        newRisk: "False Positive"
+      # Server leaks version via X-Powered-By: known for Juice Shop demo app
+      - ruleId: 10037
+        newRisk: "Informational"
+
+  # 11. HTML report
+  - type: report
+    name: report-html
+    parameters:
+      template: traditional-html
+      reportDir: "../../reports"
+      reportFile: "zap-report-juice-shop-${report_timestamp}"
+      reportTitle: "Juice Shop API Security Scan"
+      reportDescription: "OWASP ZAP - Juice Shop REST API"
+
+  # 12. JSON report
+  - type: report
+    name: report-json
+    parameters:
+      template: traditional-json
+      reportDir: "../../reports"
+      reportFile: "zap-report-juice-shop-${report_timestamp}"
+      reportTitle: "Juice Shop API Security Scan"
+      reportDescription: "OWASP ZAP - Juice Shop REST API"
+
+  # 13. SARIF report - uploaded to GitHub Security tab
+  - type: report
+    name: report-sarif
+    parameters:
+      template: sarif-json
+      reportDir: "../../reports"
+      reportFile: "zap-report-juice-shop-${report_timestamp}.sarif"
+      reportTitle: "Juice Shop API Security Scan"
+      reportDescription: "OWASP ZAP - Juice Shop REST API"

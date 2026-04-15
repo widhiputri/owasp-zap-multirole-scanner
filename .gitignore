@@ -1,0 +1,3 @@
+reports/
+projects/*/specs/*.json
+projects/*/automation.tmp.yaml

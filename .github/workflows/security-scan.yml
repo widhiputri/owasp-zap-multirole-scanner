@@ -1,0 +1,331 @@
+name: ZAP Security Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: 'Project to scan'
+        type: choice
+        options:
+          - juice-shop
+        required: true
+        default: juice-shop
+      environment:
+        description: 'Target environment'
+        type: choice
+        options:
+          - dev
+          - staging
+        required: true
+        default: dev
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load environment config
+        run: |
+          while IFS='=' read -r key value; do
+            [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+            echo "$key=$value" >> $GITHUB_ENV
+          done < projects/${{ inputs.project }}/config/${{ inputs.environment }}.properties
+
+      - name: Start Juice Shop
+        run: |
+          docker run -d \
+            --name juice-shop \
+            -p 3000:3000 \
+            -e NODE_ENV=unsafe \
+            bkimminich/juice-shop:latest
+
+          echo "[*] Waiting for Juice Shop to be ready..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+              echo "[*] Juice Shop is ready."
+              break
+            fi
+            sleep 3
+          done
+
+      - name: Fetch OpenAPI spec
+        run: |
+          mkdir -p projects/${{ inputs.project }}/specs
+          curl -sf "${{ env.base_url }}/api-docs" \
+            -o projects/${{ inputs.project }}/specs/openapi.json
+          echo "[*] OpenAPI spec fetched."
+
+      - name: Register customer accounts
+        run: |
+          # Register customer1 if not already present
+          curl -sf -X POST "${{ env.base_url }}/api/Users" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ env.customer_username }}\",\"password\":\"${JUICE_SHOP_CUSTOMER_PASSWORD}\",\"passwordRepeat\":\"${JUICE_SHOP_CUSTOMER_PASSWORD}\",\"securityQuestion\":{\"id\":1,\"question\":\"Your eldest sibling's middle name?\"},\"securityAnswer\":\"test\"}" \
+            > /dev/null 2>&1 || true
+
+          # Register customer2
+          curl -sf -X POST "${{ env.base_url }}/api/Users" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ env.customer2_username }}\",\"password\":\"${JUICE_SHOP_CUSTOMER_PASSWORD}\",\"passwordRepeat\":\"${JUICE_SHOP_CUSTOMER_PASSWORD}\",\"securityQuestion\":{\"id\":1,\"question\":\"Your eldest sibling's middle name?\"},\"securityAnswer\":\"test\"}" \
+            > /dev/null 2>&1 || true
+
+          echo "[*] Customer accounts ready."
+        env:
+          JUICE_SHOP_CUSTOMER_PASSWORD: ${{ secrets.JUICE_SHOP_CUSTOMER_PASSWORD }}
+
+      - name: Fetch tokens and run pre-scan access control checks
+        id: preflight
+        run: |
+          set -e
+
+          get_token() {
+            local username=$1
+            local password=$2
+            curl -sf -X POST "${{ env.base_url }}/rest/user/login" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\":\"${username}\",\"password\":\"${password}\"}" \
+              | jq -r '.authentication.token'
+          }
+
+          echo "[*] Fetching tokens..."
+          ADMIN_TOKEN=$(get_token "${{ env.admin_username }}" "${JUICE_SHOP_ADMIN_PASSWORD}")
+          CUSTOMER_TOKEN=$(get_token "${{ env.customer_username }}" "${JUICE_SHOP_CUSTOMER_PASSWORD}")
+
+          echo "::add-mask::${ADMIN_TOKEN}"
+          echo "::add-mask::${CUSTOMER_TOKEN}"
+          echo "[*] Tokens acquired."
+
+          # --- Rate limiting probe ---
+          echo "[*] Probing auth endpoint for rate limiting..."
+          RATE_LIMITED=false
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -X POST "${{ env.base_url }}/rest/user/login" \
+              -H "Content-Type: application/json" \
+              -d '{"email":"nonexistent@shopsafe.io","password":"wrongpassword"}' || echo "000")
+            if [ "$STATUS" = "429" ]; then
+              echo "[*] Rate limit detected after ${i} requests (429). PASS."
+              RATE_LIMITED=true
+              break
+            fi
+          done
+          if [ "$RATE_LIMITED" = "false" ]; then
+            echo "::warning::No rate limiting detected on the auth endpoint after 20 rapid requests."
+          fi
+
+          # --- Cross-role BOLA checks ---
+          echo "[*] Running cross-role access control checks..."
+          BOLA_FAILED=false
+          for endpoint in "/api/Users" "/api/Challenges" "/api/Complaints" "/api/Recycles"; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${CUSTOMER_TOKEN}" \
+              "${{ env.base_url }}${endpoint}" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "::warning::BOLA FAIL (cross-role): ${endpoint} returned 200 with customer token"
+              BOLA_FAILED=true
+            else
+              echo "[*] BOLA PASS (cross-role): ${endpoint} -> ${STATUS}"
+            fi
+          done
+
+          # --- Cross-customer BOLA checks ---
+          echo "[*] Running cross-customer access control checks..."
+          for endpoint in "/rest/basket/2" "/api/Orders?userId=2"; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${CUSTOMER_TOKEN}" \
+              "${{ env.base_url }}${endpoint}" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "::warning::BOLA FAIL (cross-customer): ${endpoint} returned 200 with customer1 token"
+              BOLA_FAILED=true
+            else
+              echo "[*] BOLA PASS (cross-customer): ${endpoint} -> ${STATUS}"
+            fi
+          done
+
+          echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> $GITHUB_OUTPUT
+          echo "CUSTOMER_TOKEN=${CUSTOMER_TOKEN}" >> $GITHUB_OUTPUT
+        env:
+          JUICE_SHOP_ADMIN_PASSWORD: ${{ secrets.JUICE_SHOP_ADMIN_PASSWORD }}
+          JUICE_SHOP_CUSTOMER_PASSWORD: ${{ secrets.JUICE_SHOP_CUSTOMER_PASSWORD }}
+
+      - name: Run ZAP scan with token refresh
+        run: |
+          set -e
+
+          ZAP_PORT=8090
+          ZAP_KEY=zapkey
+          TIMESTAMP=$(date +%Y%m%d-%H%M)
+          PLAN_FILE="projects/${{ inputs.project }}/automation.yaml"
+          TEMP_PLAN="projects/${{ inputs.project }}/automation.tmp.yaml"
+          ADMIN_TOKEN="${{ steps.preflight.outputs.ADMIN_TOKEN }}"
+          CUSTOMER_TOKEN="${{ steps.preflight.outputs.CUSTOMER_TOKEN }}"
+          CACHED_CUSTOMER_TOKEN=$CUSTOMER_TOKEN
+
+          get_token() {
+            local username=$1
+            local password=$2
+            curl -sf -X POST "${{ env.base_url }}/rest/user/login" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\":\"${username}\",\"password\":\"${password}\"}" \
+              | jq -r '.authentication.token'
+          }
+
+          set_replacer_rule() {
+            local desc_encoded=$1
+            local token=$2
+            curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+              "http://localhost:${ZAP_PORT}/JSON/replacer/action/removeRule/?description=${desc_encoded}" \
+              > /dev/null 2>&1 || true
+            curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+              "http://localhost:${ZAP_PORT}/JSON/replacer/action/addRule/?description=${desc_encoded}&enabled=true&matchType=REQ_HEADER&matchRegex=false&matchString=Authorization&replacement=Bearer%20${token}&initiators=" \
+              > /dev/null 2>&1
+          }
+
+          # Substitute vars into plan
+          sed \
+            -e "s|\${admin_token}|${ADMIN_TOKEN}|g" \
+            -e "s|\${customer_token}|${CUSTOMER_TOKEN}|g" \
+            -e "s|\${base_url}|${{ env.base_url }}|g" \
+            -e "s|\${report_timestamp}|${TIMESTAMP}|g" \
+            "$PLAN_FILE" > "$TEMP_PLAN"
+
+          # Start ZAP in Docker
+          echo "[*] Starting ZAP..."
+          docker run -d \
+            --name zap-scan \
+            --network host \
+            -v "${{ github.workspace }}:/zap/wrk:rw" \
+            zaproxy/zap-stable \
+            zap.sh -cmd \
+              -autorun /zap/wrk/${TEMP_PLAN} \
+              -port ${ZAP_PORT} \
+              -config api.key=${ZAP_KEY}
+
+          # Wait for ZAP API
+          echo "[*] Waiting for ZAP to be ready..."
+          for i in $(seq 1 60); do
+            if curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+               "http://localhost:${ZAP_PORT}/JSON/core/view/version/" > /dev/null 2>&1; then
+              echo "[*] ZAP is ready."
+              break
+            fi
+            sleep 3
+          done
+
+          # Token refresh loop
+          TOKEN_FETCH_TIME=$(date +%s)
+          CURRENT_PHASE="admin"
+
+          while docker ps --format '{{.Names}}' | grep -q "^zap-scan$"; do
+            sleep 30
+            docker ps --format '{{.Names}}' | grep -q "^zap-scan$" || break
+
+            # Admin scan done -> switch to customer token
+            if [ "$CURRENT_PHASE" = "admin" ]; then
+              SCAN_STATUS=$(curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+                "http://localhost:${ZAP_PORT}/JSON/ascan/view/status/?scanId=0" \
+                | jq -r '.status' 2>/dev/null || echo "")
+              if [ "$SCAN_STATUS" = "100" ]; then
+                echo "[*] Admin scan complete - switching to customer token..."
+                curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+                  "http://localhost:${ZAP_PORT}/JSON/replacer/action/removeRule/?description=Inject%20admin%20Bearer%20token" \
+                  > /dev/null 2>&1 || true
+                set_replacer_rule "Inject%20customer%20Bearer%20token" "${CACHED_CUSTOMER_TOKEN}"
+                CURRENT_PHASE="customer"
+                TOKEN_FETCH_TIME=$(date +%s)
+              fi
+            fi
+
+            # Customer scan done -> unauthenticated phase (stop refreshing)
+            if [ "$CURRENT_PHASE" = "customer" ]; then
+              SCAN_STATUS=$(curl -sf -H "X-ZAP-API-Key: ${ZAP_KEY}" \
+                "http://localhost:${ZAP_PORT}/JSON/ascan/view/status/?scanId=1" \
+                | jq -r '.status' 2>/dev/null || echo "")
+              if [ "$SCAN_STATUS" = "100" ]; then
+                echo "[*] Customer scan complete - unauthenticated scan phase starting."
+                CURRENT_PHASE="unauthenticated"
+              fi
+            fi
+
+            [ "$CURRENT_PHASE" = "unauthenticated" ] && continue
+
+            # Refresh tokens every 12 minutes
+            NOW=$(date +%s)
+            ELAPSED=$(( (NOW - TOKEN_FETCH_TIME) / 60 ))
+
+            if [ "$ELAPSED" -gt 12 ]; then
+              if [ "$CURRENT_PHASE" = "admin" ]; then
+                echo "[*] Refreshing admin token..."
+                ADMIN_TOKEN=$(get_token "${{ env.admin_username }}" "${JUICE_SHOP_ADMIN_PASSWORD}")
+                echo "::add-mask::${ADMIN_TOKEN}"
+                set_replacer_rule "Inject%20admin%20Bearer%20token" "${ADMIN_TOKEN}"
+
+                CACHED_CUSTOMER_TOKEN=$(get_token "${{ env.customer_username }}" "${JUICE_SHOP_CUSTOMER_PASSWORD}")
+                echo "::add-mask::${CACHED_CUSTOMER_TOKEN}"
+                echo "[*] Admin token refreshed. Customer token cached."
+              else
+                echo "[*] Refreshing customer token..."
+                CUSTOMER_TOKEN=$(get_token "${{ env.customer_username }}" "${JUICE_SHOP_CUSTOMER_PASSWORD}")
+                echo "::add-mask::${CUSTOMER_TOKEN}"
+                CACHED_CUSTOMER_TOKEN=$CUSTOMER_TOKEN
+                set_replacer_rule "Inject%20customer%20Bearer%20token" "${CUSTOMER_TOKEN}"
+                echo "[*] Customer token refreshed."
+              fi
+              TOKEN_FETCH_TIME=$(date +%s)
+            fi
+          done
+
+          echo "[*] Scan completed."
+
+          EXIT_CODE=$(docker wait zap-scan 2>/dev/null || echo "0")
+          docker rm zap-scan 2>/dev/null || true
+          rm -f "$TEMP_PLAN"
+
+          exit ${EXIT_CODE}
+        env:
+          JUICE_SHOP_ADMIN_PASSWORD: ${{ secrets.JUICE_SHOP_ADMIN_PASSWORD }}
+          JUICE_SHOP_CUSTOMER_PASSWORD: ${{ secrets.JUICE_SHOP_CUSTOMER_PASSWORD }}
+
+      - name: Upload HTML/JSON reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report-${{ inputs.project }}-${{ inputs.environment }}
+          path: reports/
+
+      - name: Upload SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/
+          category: zap-${{ inputs.project }}-${{ inputs.environment }}
+
+      - name: Open GitHub Issue on High/Critical findings
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `[ZAP] Security findings - ${{ inputs.project }} / ${{ inputs.environment }} (#${{ github.run_number }})`;
+            const body = [
+              '## ZAP Security Scan — High/Critical Findings',
+              '',
+              `**Project:** ${{ inputs.project }}`,
+              `**Environment:** ${{ inputs.environment }}`,
+              `**Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+              '',
+              'The scan reported one or more High or Critical alerts. Download the HTML/JSON report from the run artifacts for full details.',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['security', 'zap'],
+            });
+
+      - name: Stop Juice Shop
+        if: always()
+        run: docker rm -f juice-shop 2>/dev/null || true
