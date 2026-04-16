@@ -31,7 +31,7 @@ projects/
     config/
       <env>.properties           # Environment-specific config (URLs, usernames)
     specs/
-      openapi.json               # OpenAPI spec (gitignored, fetched before running)
+      openapi.json               # Manually authored OpenAPI spec (tracked in repo)
     scripts/
       run-scan.ps1               # Local scan runner (Windows/PowerShell)
 common/
@@ -64,17 +64,14 @@ docker-compose.yml               # Juice Shop (dev + staging)
 # 1. Start Juice Shop
 docker compose up -d juice-shop-dev
 
-# 2. Fetch the OpenAPI spec
-Invoke-WebRequest http://localhost:3000/api-docs -OutFile projects/juice-shop/specs/openapi.json
-
-# 3. Register customer accounts (first run only)
+# 2. Register customer accounts (first run only)
 #    See CONTRIBUTING.md for the registration commands
 
-# 4. Set required environment variables
+# 3. Set required environment variables
 $env:JUICE_SHOP_ADMIN_PASSWORD    = "admin123"
 $env:JUICE_SHOP_CUSTOMER_PASSWORD = "YourCustomerPassword"
 
-# 5. Run the scan
+# 4. Run the scan
 .\projects\juice-shop\scripts\run-scan.ps1 -Env dev
 ```
 
@@ -93,13 +90,12 @@ Select the project and environment, then configure the following secrets under *
 
 The workflow:
 1. Starts Juice Shop in Docker
-2. Fetches the OpenAPI spec
-3. Registers customer accounts
-4. Runs rate limiting and access control checks
-5. Runs the full multi-role ZAP scan with token refresh
-6. Uploads HTML/JSON reports as artifacts
-7. Uploads a SARIF report to the **GitHub Security tab**
-8. Opens a GitHub Issue automatically if any High or Critical alerts are found
+2. Registers customer accounts
+3. Runs rate limiting and access control checks
+4. Runs the full multi-role ZAP scan with token refresh
+5. Uploads HTML/JSON reports as artifacts
+6. Uploads a SARIF report to the **GitHub Security tab**
+7. Opens a GitHub Issue automatically if any High or Critical alerts are found
 
 ## Scan policies
 

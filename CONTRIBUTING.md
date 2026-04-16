@@ -1,18 +1,10 @@
 # Contributing
 
-## Fetching the OpenAPI spec
+## OpenAPI spec
 
-The spec is gitignored (it is fetched fresh before each scan). Place it under `projects/<project>/specs/` before running locally:
+The spec at `projects/juice-shop/specs/openapi.json` is manually authored and tracked in the repo. It covers the main Juice Shop REST and ORM endpoints (`/rest/` and `/api/`). No fetch step is needed before running.
 
-```powershell
-# Start Juice Shop first
-docker compose up -d juice-shop-dev
-
-# Fetch the spec
-Invoke-WebRequest http://localhost:3000/api-docs -OutFile projects/juice-shop/specs/openapi.json
-```
-
-The GitHub Actions workflow fetches the spec automatically at scan time.
+To add or remove endpoints, edit the spec directly and commit the change.
 
 ## Registering customer accounts
 
