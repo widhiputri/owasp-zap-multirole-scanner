@@ -34,6 +34,7 @@ projects/
       openapi.json               # Manually authored OpenAPI spec (tracked in repo)
     scripts/
       run-scan.ps1               # Local scan runner (Windows/PowerShell)
+      generate-report.ps1        # Converts ZAP JSON output to a clean HTML report
 common/
   scan-policies/
     rest-api.xml                 # ZAP policy for REST APIs (import into ZAP desktop)
@@ -75,7 +76,15 @@ $env:JUICE_SHOP_CUSTOMER_PASSWORD = "YourCustomerPassword"
 .\projects\juice-shop\scripts\run-scan.ps1 -Env dev
 ```
 
-Reports are saved to `reports/zap-report-juice-shop-<timestamp>.html` and `.json`.
+Reports are saved to `reports/`:
+
+| File | Description |
+|------|-------------|
+| `zap-report-juice-shop-<timestamp>.json` | Raw ZAP findings (machine-readable) |
+| `zap-report-juice-shop-<timestamp>.html` | ZAP default HTML report |
+| `zap-report-juice-shop-<timestamp>.clean.html` | Clean report with risk cards, CWE/WASC links, and a reading guide — generated automatically by `generate-report.ps1` |
+
+Open the `.clean.html` file in any browser — it has no external dependencies.
 
 ## Running via GitHub Actions
 
