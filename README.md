@@ -35,6 +35,7 @@ projects/
     scripts/
       run-scan.ps1               # Local scan runner (Windows/PowerShell)
       generate-report.ps1        # Converts ZAP JSON output to a clean HTML report
+      test-run-scan.ps1          # Unit tests for argument parsing and YAML generation
 common/
   scan-policies/
     rest-api.xml                 # ZAP policy for REST APIs (import into ZAP desktop)
@@ -123,6 +124,25 @@ Use `-Tests` to run only specific checks instead of the full scan:
 
 Rule tests (`xss`, `sqli`, etc.) default to admin + customer phases. Add a phase name to restrict scope: `-Tests "xss,admin"`.
 
+### Scan visibility
+
+**Real-time progress** is printed to the console every 30 seconds throughout the scan — no extra flags needed:
+
+```
+[14:32:15] -- Scan progress: admin (phase 1 of 3) --
+           Progress : [==============------] 72%
+           Alerts   : High=3  Medium=8  Low=5  Info=0
+           Running  : SQL Injection (45 req) [2 alerts]  |  Path Traversal (12 req)
+```
+
+**Session save** — add `-SaveSession` to preserve the full ZAP session for inspection in the GUI:
+
+```powershell
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -SaveSession
+```
+
+This saves `reports/sessions/juice-shop-<timestamp>.session`. After the scan, open it in ZAP desktop via **File → Open Session** to browse every request, response, and alert in detail.
+
 Reports are saved to `reports/`:
 
 | File | Description |
@@ -130,6 +150,7 @@ Reports are saved to `reports/`:
 | `zap-report-juice-shop-<timestamp>.json` | Raw ZAP findings (machine-readable) |
 | `zap-report-juice-shop-<timestamp>.html` | ZAP default HTML report |
 | `zap-report-juice-shop-<timestamp>.clean.html` | Clean report with risk cards, CWE/WASC links, and a reading guide — generated automatically by `generate-report.ps1` |
+| `sessions/juice-shop-<timestamp>.session` | ZAP session file — only written when `-SaveSession` is used |
 
 Open the `.clean.html` file in any browser — it has no external dependencies.
 
