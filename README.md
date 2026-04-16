@@ -4,6 +4,22 @@ OWASP ZAP automated security testing for REST APIs. Uses the [ZAP Automation Fra
 
 Targets [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/) — a deliberately vulnerable web application designed for security testing practice.
 
+## Security coverage
+
+| Area | What covers it |
+|------|---------------|
+| Penetration-style testing | Active scan across 4 auth phases (admin, customer, unauth, invalid-token) |
+| Injection risks | `sqli`, `cmd-injection`, `path-traversal`, `xxe`, `ldap`, `ssrf` rule categories |
+| XSS | `xss` — reflected, persistent, and DOM-based rules; passive scan also fires on responses |
+| Authentication testing | JWT Bearer auth; invalid-token phase tests expired/malformed tokens; unauthenticated phase tests all endpoints without auth |
+| Session management | `-Tests "session"` — token-after-logout, concurrent sessions, JWT signature tamper |
+| Authorization / access control | BOLA checks — cross-role (customer token vs admin endpoints) and cross-customer (customer1 vs customer2 resources) |
+| API security testing | Manually authored OpenAPI spec covering 67 endpoints; all actively scanned across auth roles |
+| Input validation / fuzz testing | `-Tests "fuzz"` — all injection rules at Insane strength for deeper payload coverage |
+| Security misconfigurations | Passive scan flags missing headers (CSP, HSTS, etc.) and verbose error responses |
+| Information leakage | Passive scan detects stack traces, X-Powered-By headers, and sensitive data in responses |
+| Network exposure | OpenAPI spec maps the full attack surface; all 67 endpoints tested across roles |
+
 ## How it works
 
 Each scan runs seven phases against the target's OpenAPI spec:
