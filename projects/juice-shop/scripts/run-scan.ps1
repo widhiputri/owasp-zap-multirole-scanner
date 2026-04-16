@@ -334,6 +334,13 @@ try {
     Write-Host ""
     Write-Host "[*] ZAP scan completed."
 
+    # Generate clean report from the JSON output
+    $reportJson   = "$PROJECT_DIR\..\..\reports\zap-report-juice-shop-$report_timestamp.json"
+    $generateScript = "$PSScriptRoot\generate-report.ps1"
+    if ((Test-Path $reportJson) -and (Test-Path $generateScript)) {
+        & $generateScript -JsonReport $reportJson
+    }
+
 } finally {
     if (-not $zapProcess.HasExited) {
         Write-Host "[*] Stopping ZAP..."
