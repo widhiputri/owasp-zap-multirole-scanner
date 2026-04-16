@@ -5,12 +5,13 @@
 # to whichever subset of phases is enabled.
 #
 # Usage:
-#   .\run-scan.ps1 -Env dev                         # full scan (default)
-#   .\run-scan.ps1 -Env dev -Tests "bola"           # access control check only
-#   .\run-scan.ps1 -Env dev -Tests "xss,sqli"       # XSS + SQLi across admin/customer
-#   .\run-scan.ps1 -Env dev -Tests "xss,admin"      # XSS on admin phase only
-#   .\run-scan.ps1 -Env dev -Tests "auth-bypass"    # unauth + invalid-token phases
-#   .\run-scan.ps1 -Env dev -Tests "passive"        # passive scan only
+#   .\run-scan.ps1 -Env dev                             # full scan (default)
+#   .\run-scan.ps1 -Env dev -Tests "bola"               # access control check only
+#   .\run-scan.ps1 -Env dev -Tests "xss,sqli"           # XSS + SQLi across admin/customer
+#   .\run-scan.ps1 -Env dev -Tests "xss,admin"          # XSS on admin phase only
+#   .\run-scan.ps1 -Env dev -Tests "auth-bypass"        # unauth + invalid-token phases
+#   .\run-scan.ps1 -Env dev -Tests "passive"            # passive scan only
+#   .\run-scan.ps1 -Env dev -SaveSession                # also save .session file for ZAP GUI
 #
 # Available test names (combine with commas):
 #
@@ -50,7 +51,12 @@ param (
     [Parameter(Mandatory=$true)]
     [string]$Env,
 
-    [string]$Tests = "all"
+    [string]$Tests = "all",
+
+    # Save ZAP session to reports/sessions/ so it can be opened in ZAP GUI later.
+    # File: reports/sessions/juice-shop-<timestamp>.session
+    # Open via: ZAP > File > Open Session
+    [switch]$SaveSession
 )
 
 $ZAP_DIR     = "C:\Program Files\ZAP\Zed Attack Proxy"
@@ -262,6 +268,76 @@ function Wait-ForZap {
     }
     Write-Error "ZAP did not become ready after 3 minutes."
     return $false
+}
+
+# Print a live progress block for the active scan currently running.
+# Called every polling interval so the user can see what ZAP is doing without
+# opening the GUI. Shows scan %, alert counts by severity, and active rules.
+function Show-ScanProgress($phaseIdx, $phaseSeq) {
+    if ($phaseSeq.Count -eq 0 -or $phaseIdx -ge $phaseSeq.Count) { return }
+
+    $phase  = $phaseSeq[$phaseIdx]
+    $scanId = [string]$phaseIdx
+    $ts     = Get-Date -Format 'HH:mm:ss'
+
+    try {
+        # Overall scan percentage
+        $s      = Invoke-ZapApi "/JSON/ascan/view/status/" @{ scanId = $scanId }
+        $pct    = [int]$s.status
+        $filled = [int]($pct / 5)
+        $bar    = ("=" * $filled) + ("-" * (20 - $filled))
+
+        Write-Host ""
+        Write-Host "[$ts] -- Scan progress: $phase (phase $($phaseIdx+1) of $($phaseSeq.Count)) --"
+        Write-Host "           Progress : [$bar] $pct%"
+
+        # Alert counts by severity
+        try {
+            $sum = Invoke-ZapApi "/JSON/alert/view/alertsSummary/"
+            $as  = $sum.alertsSummary
+            Write-Host "           Alerts   : High=$($as.High)  Medium=$($as.Medium)  Low=$($as.Low)  Info=$($as.Informational)"
+        } catch {
+            try {
+                $n = Invoke-ZapApi "/JSON/core/view/numberOfAlerts/"
+                Write-Host "           Alerts   : $($n.numberOfAlerts) total"
+            } catch {}
+        }
+
+        # Currently active scan rules from scanProgress API
+        try {
+            $prog       = Invoke-ZapApi "/JSON/ascan/view/scanProgress/" @{ scanId = $scanId }
+            $allPlugins = @()
+            foreach ($entry in $prog.scanProgress) {
+                $hostProcs = if ($entry.HostProcess) { @($entry.HostProcess) } else { @() }
+                foreach ($hp in $hostProcs) {
+                    $allPlugins += if ($hp.Plugin) { @($hp.Plugin) } else { @() }
+                }
+            }
+            $running = @($allPlugins | Where-Object { $_.status -eq "running" })
+            if ($running.Count -gt 0) {
+                $names = ($running | Select-Object -First 4 | ForEach-Object {
+                    $label = $_.name
+                    if ($_.requestCount) { $label += " ($($_.requestCount) req)" }
+                    if ($_.alertCount -and [int]$_.alertCount -gt 0) { $label += " [$($_.alertCount) alerts]" }
+                    $label
+                }) -join "  |  "
+                Write-Host "           Running  : $names"
+            } else {
+                $done = ($allPlugins | Where-Object { $_.status -ne $null }).Count
+                if ($done -gt 0) { Write-Host "           Rules    : $done completed, waiting for next..." }
+            }
+        } catch {}
+
+    } catch {}
+}
+
+# Print progress for passive-only runs (no activeScan API available).
+function Show-PassiveProgress {
+    try {
+        $rec = Invoke-ZapApi "/JSON/pscan/view/recordsToScan/"
+        $ts  = Get-Date -Format 'HH:mm:ss'
+        Write-Host "[$ts] -- Passive scan: $($rec.recordsToScan) records remaining --"
+    } catch {}
 }
 
 # Probe auth endpoint for rate limiting.
@@ -643,6 +719,16 @@ $planContent = Build-AutomationYaml `
 
 [System.IO.File]::WriteAllText($TEMP_PLAN, $planContent, [System.Text.UTF8Encoding]::new($false))
 
+# Session file path (used if -SaveSession is set)
+$sessionFile = $null
+if ($SaveSession) {
+    $sessionDir  = [System.IO.Path]::GetFullPath("$PROJECT_DIR\..\..\reports\sessions")
+    New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
+    $sessionFile = "$sessionDir\juice-shop-$report_timestamp"
+    Write-Host "[*] Session will be saved: $sessionFile.session"
+    Write-Host "    Open in ZAP GUI: File -> Open Session -> select the .session file"
+}
+
 # =============================================================================
 # Shut down any existing ZAP instance
 # =============================================================================
@@ -659,8 +745,10 @@ try {
 
 Write-Host "[*] Starting ZAP scan on port $ZAP_PORT..."
 Push-Location $ZAP_DIR
+$zapArgs = "-cmd -autorun `"$TEMP_PLAN`" -port $ZAP_PORT -config api.key=$ZAP_KEY"
+if ($sessionFile) { $zapArgs += " -newsession `"$sessionFile`"" }
 $zapProcess = Start-Process -FilePath $ZAP_PATH `
-    -ArgumentList "-cmd -autorun `"$TEMP_PLAN`" -port $ZAP_PORT -config api.key=$ZAP_KEY" `
+    -ArgumentList $zapArgs `
     -PassThru -NoNewWindow
 Pop-Location
 
@@ -692,14 +780,17 @@ try {
         Start-Sleep 30
         if ($zapProcess.HasExited) { break }
 
-        # No active scan phases (passive-only run) -> just wait
-        if ($activeScanSeq.Count -eq 0) { continue }
+        # No active scan phases (passive-only run) -> show passive progress and wait
+        if ($activeScanSeq.Count -eq 0) { Show-PassiveProgress; continue }
 
         # All phases accounted for -> just wait for ZAP to finish reporting
         if ($currentPhaseIdx -ge $activeScanSeq.Count) { continue }
 
         $currentPhase  = $activeScanSeq[$currentPhaseIdx]
         $currentScanId = [string]$currentPhaseIdx
+
+        # Show live progress for every phase (authenticated or not)
+        Show-ScanProgress $currentPhaseIdx $activeScanSeq
 
         # Unauthenticated phases: no token to refresh, just track completion
         if ($currentPhase -in @("unauth", "invalid-token")) {
@@ -757,6 +848,16 @@ try {
 
     Write-Host ""
     Write-Host "[*] ZAP scan completed."
+
+    # Save session via API (ensures the .session file is fully flushed to disk)
+    if ($sessionFile) {
+        try {
+            Invoke-ZapApi "/JSON/core/action/saveSession/" @{ name = $sessionFile; overwrite = "true" } | Out-Null
+            Write-Host "[*] Session saved: $sessionFile.session"
+        } catch {
+            Write-Host "[*] Session file: $sessionFile.session (saved via -newsession at startup)"
+        }
+    }
 
     # Generate clean HTML report from JSON output
     $reportJson     = "$PROJECT_DIR\..\..\reports\zap-report-juice-shop-$report_timestamp.json"

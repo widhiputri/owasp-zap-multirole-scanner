@@ -319,6 +319,28 @@ Assert-Contains    "passive: has report-html"      $yaml "report-html"
 
 # ---------------------------------------------------------------------------
 Write-Host ""
+Write-Host "=== -SaveSession path logic ===" -ForegroundColor Cyan
+
+# Simulate session path calculation for -SaveSession
+$fakeProjectDir  = "C:\fake\projects\juice-shop\scripts"
+$fakeTimestamp   = "20260101-1200"
+$fakeSessionDir  = [System.IO.Path]::GetFullPath("$fakeProjectDir\..\..\..\..\reports\sessions")
+$fakeSessionFile = "$fakeSessionDir\juice-shop-$fakeTimestamp"
+Assert-Contains "-SaveSession path contains timestamp" $fakeSessionFile $fakeTimestamp
+Assert-Contains "-SaveSession path contains sessions dir" $fakeSessionFile "sessions"
+
+# Simulate ZAP arg building
+$zapArgs = "-cmd -autorun `"plan.yaml`" -port 8080 -config api.key=zapkey"
+$sessionFile = $fakeSessionFile
+$zapArgs += " -newsession `"$sessionFile`""
+Assert-Contains "ZAP args contain -newsession" $zapArgs "-newsession"
+Assert-Contains "ZAP args contain session path" $zapArgs $fakeTimestamp
+
+$zapArgsNoSession = "-cmd -autorun `"plan.yaml`" -port 8080 -config api.key=zapkey"
+Assert-NotContains "No -newsession without -SaveSession" $zapArgsNoSession "-newsession"
+
+# ---------------------------------------------------------------------------
+Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan
 Write-Host "  PASSED: $pass   FAILED: $fail" -ForegroundColor $(if ($fail -eq 0) { "Green" } else { "Red" })
 Write-Host "==============================" -ForegroundColor Cyan
