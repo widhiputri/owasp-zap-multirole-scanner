@@ -76,6 +76,53 @@ $env:JUICE_SHOP_CUSTOMER_PASSWORD = "YourCustomerPassword"
 .\projects\juice-shop\scripts\run-scan.ps1 -Env dev
 ```
 
+### Selective testing
+
+Use `-Tests` to run only specific checks instead of the full scan:
+
+```powershell
+# Access control (BOLA) checks only - no ZAP required
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "bola"
+
+# Rate limiting probe only
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "rate-limit"
+
+# XSS and SQL injection across admin + customer phases
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "xss,sqli"
+
+# XSS on admin phase only
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "xss,admin"
+
+# Auth bypass checks (unauthenticated + invalid token phases)
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "auth-bypass"
+
+# Combine pre-scan checks with a ZAP rule category
+.\projects\juice-shop\scripts\run-scan.ps1 -Env dev -Tests "bola,rate-limit,xss"
+```
+
+**Available test names:**
+
+| Name | What it runs |
+|------|-------------|
+| `all` | Everything (default) |
+| `bola` | Cross-role + cross-customer access control check |
+| `rate-limit` | 20 rapid auth requests - warns if no 429 |
+| `xss` | Cross-site scripting rules |
+| `sqli` | SQL injection rules |
+| `path-traversal` | Path traversal rules |
+| `cmd-injection` | OS command injection rules |
+| `ssrf` | Server-side request forgery rules |
+| `xxe` | XML external entity injection rules |
+| `ldap` | LDAP injection rules |
+| `admin` | Admin-role active scan (all rules) |
+| `customer` | Customer-role active scan (all rules) |
+| `unauth` | Unauthenticated active scan (all rules) |
+| `invalid-token` | Expired/invalid token active scan (all rules) |
+| `auth-bypass` | Alias for `unauth` + `invalid-token` |
+| `passive` | Passive scan only, no active scan |
+
+Rule tests (`xss`, `sqli`, etc.) default to admin + customer phases. Add a phase name to restrict scope: `-Tests "xss,admin"`.
+
 Reports are saved to `reports/`:
 
 | File | Description |
