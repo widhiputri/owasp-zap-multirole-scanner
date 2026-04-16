@@ -344,6 +344,77 @@ function Show-ScanProgress($phaseIdx, $phaseSeq) {
             }
         } catch {}
 
+        # Show actual HTTP traffic ZAP sent since last poll
+        Show-RecentRequests
+
+    } catch {}
+}
+
+# Print the HTTP requests ZAP sent since the last poll.
+# Shows method, URL, status code, and request body snippet — color-coded by status:
+#   Green  = 2xx  (endpoint responded; may or may not be vulnerable)
+#   Cyan   = 3xx  (redirect)
+#   Yellow = 4xx  (request blocked / access denied)
+#   Red    = 5xx  (server error on the payload — strong finding signal)
+#
+# Tracks a running message-count cursor so each call only shows new traffic,
+# not everything from the beginning of the scan.
+$script:lastShownMsgCount = 0
+
+function Show-RecentRequests {
+    try {
+        $total = [int](Invoke-ZapApi "/JSON/core/view/numberOfMessages/").numberOfMessages
+        if ($total -eq 0) { return }
+
+        $newCount = $total - $script:lastShownMsgCount
+        if ($newCount -le 0) { return }
+
+        # Show up to 8 of the newest messages; note how many were skipped
+        $showCount = [Math]::Min($newCount, 8)
+        $start     = $total - $showCount
+
+        $msgs = @((Invoke-ZapApi "/JSON/core/view/messages/" @{
+            start = "$start"; count = "$showCount"
+        }).messages)
+
+        if ($msgs.Count -eq 0) { return }
+
+        $skippedNote = if ($newCount -gt $showCount) { " (showing last $showCount of $newCount)" } else { "" }
+        Write-Host "           Requests : $newCount new$skippedNote"
+
+        foreach ($m in $msgs) {
+            try {
+                # Parse "METHOD /path HTTP/1.1" from first line of request header
+                $reqLine = ($m.requestHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
+                $parts   = $reqLine -split ' '
+                $method  = $parts[0].PadRight(4)
+                $path    = if ($parts.Count -gt 1) { $parts[1] } else { "?" }
+                if ($path.Length -gt 55) { $path = $path.Substring(0, 52) + "..." }
+
+                # Parse status code from first line of response header
+                $statusLine = ($m.responseHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
+                $status     = if ($statusLine -match ' (\d{3}) ') { $matches[1] } else { "---" }
+
+                # Color by response status
+                $color = if    ($status -match '^2') { "Green"  } `
+                         elseif ($status -match '^3') { "Cyan"   } `
+                         elseif ($status -match '^4') { "Yellow" } `
+                         elseif ($status -match '^5') { "Red"    } `
+                         else                         { "Gray"   }
+
+                # Request body snippet (shows the actual payload being tested)
+                $body    = $m.requestBody
+                $bodyStr = ""
+                if ($body -and $body.Trim().Length -gt 0) {
+                    $b       = $body.Trim() -replace '\s+', ' '
+                    $bodyStr = "  " + (if ($b.Length -gt 55) { $b.Substring(0, 52) + "..." } else { $b })
+                }
+
+                Write-Host "             [$status] $method $($path.PadRight(55))$bodyStr" -ForegroundColor $color
+            } catch {}
+        }
+
+        $script:lastShownMsgCount = $total
     } catch {}
 }
 
@@ -927,6 +998,7 @@ try {
                 $currentPhaseIdx++
 
                 # Switch replacer when moving admin -> customer
+                $script:lastShownMsgCount = 0  # reset so next phase shows its own traffic
                 if ($currentPhaseIdx -lt $activeScanSeq.Count) {
                     $nextPhase = $activeScanSeq[$currentPhaseIdx]
                     if ($nextPhase -eq "customer") {
