@@ -1,0 +1,651 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "OWASP Juice Shop API",
+    "version": "1.0.0",
+    "description": "Manually authored spec covering the main REST and ORM endpoints for security scanning."
+  },
+  "servers": [
+    { "url": "http://localhost:3000" }
+  ],
+  "security": [
+    { "bearerAuth": [] }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "paths": {
+    "/rest/user/login": {
+      "post": {
+        "summary": "Login",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email":    { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/user/whoami": {
+      "get": {
+        "summary": "Get current user info",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/user/change-password": {
+      "get": {
+        "summary": "Change password",
+        "parameters": [
+          { "name": "current", "in": "query", "schema": { "type": "string" } },
+          { "name": "new",     "in": "query", "schema": { "type": "string" } },
+          { "name": "repeat",  "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/user/reset-password": {
+      "post": {
+        "summary": "Reset password",
+        "security": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email":  { "type": "string" },
+                  "answer": { "type": "string" },
+                  "new":    { "type": "string" },
+                  "repeat": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Users": {
+      "get": {
+        "summary": "List all users (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Register new user",
+        "security": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email":          { "type": "string" },
+                  "password":       { "type": "string" },
+                  "passwordRepeat": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Users/{id}": {
+      "get": {
+        "summary": "Get user by ID",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update user",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete user (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Products": {
+      "get": {
+        "summary": "List products",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Create product (admin only)",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Products/{id}": {
+      "get": {
+        "summary": "Get product",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update product (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete product (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/products/search": {
+      "get": {
+        "summary": "Search products",
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/basket/{id}": {
+      "get": {
+        "summary": "Get basket by ID (BOLA target)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/basket/{id}/checkout": {
+      "post": {
+        "summary": "Checkout basket",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/basket/{id}/coupon/{coupon}": {
+      "put": {
+        "summary": "Apply coupon to basket",
+        "parameters": [
+          { "name": "id",     "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "coupon", "in": "path", "required": true, "schema": { "type": "string"  } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/BasketItems": {
+      "get": {
+        "summary": "List basket items",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Add item to basket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "BasketId":  { "type": "integer" },
+                  "ProductId": { "type": "integer" },
+                  "quantity":  { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/BasketItems/{id}": {
+      "get": {
+        "summary": "Get basket item",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update basket item quantity",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Remove basket item",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Orders": {
+      "get": {
+        "summary": "List orders (BOLA target)",
+        "parameters": [
+          { "name": "userId", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Create order",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Orders/{id}": {
+      "get": {
+        "summary": "Get order by ID (BOLA target)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update order",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete order",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Challenges": {
+      "get": {
+        "summary": "List challenges (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Challenges/{id}": {
+      "get": {
+        "summary": "Get challenge (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Complaints": {
+      "get": {
+        "summary": "List complaints (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Submit complaint",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "UserId":  { "type": "integer" },
+                  "message": { "type": "string"  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Complaints/{id}": {
+      "get": {
+        "summary": "Get complaint (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update complaint (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete complaint (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Recycles": {
+      "get": {
+        "summary": "List recycle requests (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Submit recycle request",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Recycles/{id}": {
+      "get": {
+        "summary": "Get recycle request (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update recycle request (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete recycle request (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Feedbacks": {
+      "get": {
+        "summary": "List feedbacks",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Submit feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rating":  { "type": "integer" },
+                  "comment": { "type": "string"  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Feedbacks/{id}": {
+      "get": {
+        "summary": "Get feedback",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update feedback (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete feedback (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/SecurityQuestions": {
+      "get": {
+        "summary": "List security questions",
+        "security": [],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/SecurityAnswers": {
+      "get": {
+        "summary": "List security answers (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Addresss": {
+      "get": {
+        "summary": "List addresses",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Create address",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fullName":      { "type": "string" },
+                  "mobileNum":     { "type": "string" },
+                  "zipCode":       { "type": "string" },
+                  "streetAddress": { "type": "string" },
+                  "city":          { "type": "string" },
+                  "state":         { "type": "string" },
+                  "country":       { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Addresss/{id}": {
+      "get": {
+        "summary": "Get address",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update address",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete address",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Cards": {
+      "get": {
+        "summary": "List payment cards",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Add payment card",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fullName": { "type": "string"  },
+                  "cardNum":  { "type": "string"  },
+                  "expMonth": { "type": "integer" },
+                  "expYear":  { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Cards/{id}": {
+      "get": {
+        "summary": "Get payment card",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Update payment card",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete payment card",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Deliverys": {
+      "get": {
+        "summary": "List delivery methods",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Deliverys/{id}": {
+      "get": {
+        "summary": "Get delivery method",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Memories": {
+      "get": {
+        "summary": "List memories",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Memories/{id}": {
+      "delete": {
+        "summary": "Delete memory (admin only)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/Wallets": {
+      "get": {
+        "summary": "Get wallet balance",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/coupon/{coupon}": {
+      "get": {
+        "summary": "Validate coupon code",
+        "parameters": [
+          { "name": "coupon", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/track-order/{id}": {
+      "get": {
+        "summary": "Track order by ID",
+        "security": [],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/captcha": {
+      "get": {
+        "summary": "Get CAPTCHA challenge",
+        "security": [],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/admin/application-version": {
+      "get": {
+        "summary": "Get application version (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/rest/admin/application-configuration": {
+      "get": {
+        "summary": "Get application configuration (admin only)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  }
+}

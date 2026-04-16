@@ -34,7 +34,7 @@ $CONFIG_FILE = "$PROJECT_DIR\config\$Env.properties"
 $PLAN_FILE   = "$PROJECT_DIR\automation.yaml"
 $TEMP_PLAN   = "$PROJECT_DIR\automation.tmp.yaml"
 
-# --- Load config file ---------------------------------------------------------
+# Load config file
 Write-Host "[*] Loading config: $CONFIG_FILE"
 $config = @{}
 Get-Content $CONFIG_FILE | ForEach-Object {
@@ -43,9 +43,9 @@ Get-Content $CONFIG_FILE | ForEach-Object {
     }
 }
 
-$base_url          = $config["base_url"]
-$admin_username    = $config["admin_username"]
-$customer_username = $config["customer_username"]
+$base_url           = $config["base_url"]
+$admin_username     = $config["admin_username"]
+$customer_username  = $config["customer_username"]
 $customer2_username = $config["customer2_username"]
 
 $admin_password    = $env:JUICE_SHOP_ADMIN_PASSWORD
@@ -56,7 +56,7 @@ if (-not $admin_password -or -not $customer_password) {
     exit 1
 }
 
-# --- Helper: fetch Juice Shop JWT ---------------------------------------------
+# Helper: fetch Juice Shop JWT
 # Follows the Resource Owner Password Credentials pattern:
 #   POST credentials -> receive short-lived JWT -> use as Bearer token
 function Get-Token($username, $password) {
@@ -72,7 +72,7 @@ function Get-Token($username, $password) {
     }
 }
 
-# --- Helper: call ZAP REST API ------------------------------------------------
+# Helper: call ZAP REST API
 function Invoke-ZapApi($path, $params = @{}) {
     $headers = @{ "X-ZAP-API-Key" = $ZAP_KEY }
     $uri = "$ZAP_BASE$path"
@@ -85,7 +85,7 @@ function Invoke-ZapApi($path, $params = @{}) {
     return Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
 }
 
-# --- Helper: update a ZAP replacer rule with a fresh token --------------------
+# Helper: update a ZAP replacer rule with a fresh token
 function Set-ZapReplacerRule($description, $token) {
     try {
         Invoke-ZapApi "/JSON/replacer/action/removeRule/" @{ description = $description } | Out-Null
@@ -104,7 +104,7 @@ function Set-ZapReplacerRule($description, $token) {
     Write-Host "[*] [$(Get-Date -Format 'HH:mm:ss')] Replacer updated: $description"
 }
 
-# --- Helper: wait for ZAP API to become available ----------------------------
+# Helper: wait for ZAP API to become available
 function Wait-ForZap {
     Write-Host "[*] Waiting for ZAP to be ready..."
     for ($i = 0; $i -lt 60; $i++) {
@@ -120,9 +120,9 @@ function Wait-ForZap {
     return $false
 }
 
-# --- Helper: probe auth endpoint for rate limiting ----------------------------
+# Helper: probe auth endpoint for rate limiting
 # Sends 20 rapid login requests and checks whether the server enforces
-# any rate limiting (429 or lockout). Reports a warning if not — any
+# any rate limiting (429 or lockout). Reports a warning if not -- any
 # endpoint accepting unlimited credential submissions is a brute-force risk.
 function Test-RateLimiting {
     Write-Host "`n[*] Probing auth endpoint for rate limiting..."
@@ -148,7 +148,7 @@ function Test-RateLimiting {
     }
 }
 
-# --- Helper: BOLA / cross-role / cross-customer access checks ----------------
+# Helper: BOLA / cross-role / cross-customer access checks
 # Cross-role: customer token must not access admin-only endpoints.
 # Cross-customer: customer1 token must not access customer2's basket/orders.
 function Test-AccessControls($adminToken, $customerToken, $customer2Token) {
@@ -157,59 +157,67 @@ function Test-AccessControls($adminToken, $customerToken, $customer2Token) {
 
     # Cross-role checks: customer should be blocked from admin endpoints
     $crossRoleChecks = @(
-        @{ desc = "GET /api/Users (admin-only)";           url = "$base_url/api/Users" },
-        @{ desc = "GET /api/Challenges (admin-only)";      url = "$base_url/api/Challenges" },
-        @{ desc = "GET /api/Complaints (admin-only)";      url = "$base_url/api/Complaints" },
-        @{ desc = "GET /api/Recycles (admin-only)";        url = "$base_url/api/Recycles" }
+        @{ desc = "GET /api/Users (admin-only)";      url = "$base_url/api/Users" },
+        @{ desc = "GET /api/Challenges (admin-only)"; url = "$base_url/api/Challenges" },
+        @{ desc = "GET /api/Complaints (admin-only)"; url = "$base_url/api/Complaints" },
+        @{ desc = "GET /api/Recycles (admin-only)";   url = "$base_url/api/Recycles" }
     )
 
     foreach ($check in $crossRoleChecks) {
         try {
             $resp = Invoke-WebRequest -Uri $check.url `
                 -Headers @{ Authorization = "Bearer $customerToken" } `
-                -SkipHttpErrorCheck -UseBasicParsing
+                -UseBasicParsing
             if ($resp.StatusCode -eq 200) {
                 Write-Warning "[!] BOLA FAIL (cross-role): $($check.desc) returned 200 with customer token"
                 $failed = $true
             } else {
                 Write-Host "[*] BOLA PASS (cross-role): $($check.desc) -> $($resp.StatusCode)"
             }
+        } catch [System.Net.WebException] {
+            # HTTP error response (401/403) -- access was correctly denied
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            Write-Host "[*] BOLA PASS (cross-role): $($check.desc) -> $statusCode"
         } catch {
-            Write-Host "[*] BOLA PASS (connection error): $($check.desc)"
+            Write-Host "[*] BOLA PASS (network error): $($check.desc)"
         }
     }
 
     # Cross-customer checks: customer1 should not access customer2's resources.
     # Basket IDs 1 and 2 belong to the first two registered users by default.
     $crossCustomerChecks = @(
-        @{ desc = "GET /rest/basket/2 (customer2 basket)"; url = "$base_url/rest/basket/2" },
-        @{ desc = "GET /api/Orders?userId=2 (customer2 orders)"; url = "$base_url/api/Orders?userId=2" }
+        @{ desc = "GET /rest/basket/2 (customer2 basket)";        url = "$base_url/rest/basket/2" },
+        @{ desc = "GET /api/Orders?userId=2 (customer2 orders)";  url = "$base_url/api/Orders?userId=2" }
     )
 
     foreach ($check in $crossCustomerChecks) {
         try {
             $resp = Invoke-WebRequest -Uri $check.url `
                 -Headers @{ Authorization = "Bearer $customerToken" } `
-                -SkipHttpErrorCheck -UseBasicParsing
+                -UseBasicParsing
             if ($resp.StatusCode -eq 200) {
                 Write-Warning "[!] BOLA FAIL (cross-customer): $($check.desc) returned 200 with customer1 token"
                 $failed = $true
             } else {
                 Write-Host "[*] BOLA PASS (cross-customer): $($check.desc) -> $($resp.StatusCode)"
             }
+        } catch [System.Net.WebException] {
+            # HTTP error response (401/403) -- access was correctly denied
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            Write-Host "[*] BOLA PASS (cross-customer): $($check.desc) -> $statusCode"
         } catch {
-            Write-Host "[*] BOLA PASS (connection error): $($check.desc)"
+            Write-Host "[*] BOLA PASS (network error): $($check.desc)"
         }
     }
 
     if ($failed) {
-        Write-Warning "[!] Access control issues found — review warnings above before proceeding."
+        Write-Warning "[!] Access control issues found -- review warnings above before proceeding."
     } else {
         Write-Host "[*] All access control checks passed."
     }
 }
 
-# --- Fetch tokens -------------------------------------------------------------
+# Fetch tokens
 $admin_token     = Get-Token $admin_username $admin_password
 $customer_token  = Get-Token $customer_username $customer_password
 $customer2_token = Get-Token $customer2_username $customer_password
@@ -220,11 +228,11 @@ if (-not $admin_token -or -not $customer_token -or -not $customer2_token) {
 }
 Write-Host "[*] Tokens acquired."
 
-# --- Pre-scan checks ----------------------------------------------------------
+# Pre-scan checks
 Test-RateLimiting
 Test-AccessControls $admin_token $customer_token $customer2_token
 
-# --- Generate temp plan with substitutions ------------------------------------
+# Generate temp plan with substitutions
 $report_timestamp = Get-Date -Format "yyyyMMdd-HHmm"
 Write-Host "[*] Generating temp plan (report: zap-report-juice-shop-$report_timestamp)..."
 (Get-Content $PLAN_FILE) `
@@ -234,7 +242,14 @@ Write-Host "[*] Generating temp plan (report: zap-report-juice-shop-$report_time
     -replace '\$\{report_timestamp\}', $report_timestamp |
     Set-Content $TEMP_PLAN
 
-# --- Start ZAP in background with automation plan and API enabled -------------
+# Shut down any existing ZAP instance on this port to avoid home directory conflicts
+try {
+    Invoke-ZapApi "/JSON/core/action/shutdown/" | Out-Null
+    Write-Host "[*] Existing ZAP instance shut down. Waiting for it to exit..."
+    Start-Sleep 5
+} catch {}
+
+# Start ZAP in background with automation plan and API enabled
 Write-Host "[*] Starting ZAP scan on port $ZAP_PORT..."
 Push-Location $ZAP_DIR
 $zapProcess = Start-Process -FilePath $ZAP_PATH `
@@ -260,7 +275,7 @@ try {
         Start-Sleep 30
         if ($zapProcess.HasExited) { break }
 
-        # --- Phase detection --------------------------------------------------
+        # Phase detection
 
         # Scan 0 (admin) done -> switch to customer token
         if ($currentPhase -eq "admin") {
@@ -293,7 +308,7 @@ try {
         # Skip token refresh during unauthenticated and invalid-token phases
         if ($currentPhase -eq "unauthenticated") { continue }
 
-        # --- Token refresh (every 12 minutes) ---------------------------------
+        # Token refresh (every 12 minutes)
         $elapsed = (Get-Date) - $tokenFetchTime
         if ($elapsed.TotalMinutes -gt 12) {
             if ($zapProcess.HasExited) { break }

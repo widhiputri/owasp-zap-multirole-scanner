@@ -175,7 +175,7 @@ jobs:
         newRisk: "False Positive"
       # Server leaks version via X-Powered-By: known for Juice Shop demo app
       - ruleId: 10037
-        newRisk: "Informational"
+        newRisk: "Info"
 
   # 11. HTML report
   - type: report
