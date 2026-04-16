@@ -47,8 +47,8 @@ function Assert-NotContains($label, $text, $substring) {
 
 $validTests = @(
     "all",
-    "bola", "rate-limit",
-    "xss", "sqli", "path-traversal", "cmd-injection", "ssrf", "xxe", "ldap",
+    "bola", "rate-limit", "session",
+    "xss", "sqli", "path-traversal", "cmd-injection", "ssrf", "xxe", "ldap", "fuzz",
     "admin", "customer", "unauth", "invalid-token", "auth-bypass", "passive"
 )
 
@@ -88,7 +88,8 @@ function Resolve-TestPlan([string]$Tests) {
             throw "Unknown test '$t'"
         }
     }
-    $runAll = $testList -contains "all"
+    $runAll   = $testList -contains "all"
+    $fuzzMode = $runAll -or ($testList -contains "fuzz")
     function Should-Run([string]$n) { $runAll -or ($testList -contains $n) }
 
     $hasRuleCat = ($testList | Where-Object { $ruleCatNames -contains $_ }).Count -gt 0
@@ -96,7 +97,7 @@ function Resolve-TestPlan([string]$Tests) {
 
     if ($runAll) {
         $runAdmin = $true; $runCustomer = $true; $runUnauth = $true; $runInvalid = $true
-    } elseif ($hasRuleCat -and -not $hasPhase) {
+    } elseif (($hasRuleCat -or $fuzzMode) -and -not $hasPhase) {
         $runAdmin = $true; $runCustomer = $true; $runUnauth = $false; $runInvalid = $false
     } else {
         $runAdmin    = Should-Run "admin"
@@ -113,6 +114,10 @@ function Resolve-TestPlan([string]$Tests) {
             if (Should-Run $cat) { $filteredRules += $ruleCategories[$cat] }
         }
     }
+    if ($fuzzMode -and -not $runAll -and -not $hasRuleCat) {
+        $filteredRules = @()
+        foreach ($cat in $ruleCatNames) { $filteredRules += $ruleCategories[$cat] }
+    }
 
     return [pscustomobject]@{
         runAdmin       = $runAdmin
@@ -120,8 +125,10 @@ function Resolve-TestPlan([string]$Tests) {
         runUnauth      = $runUnauth
         runInvalid     = $runInvalid
         passiveOnly    = $passiveOnly
+        fuzzMode       = ($fuzzMode -and -not $runAll)
         checkBola      = Should-Run "bola"
         checkRateLimit = Should-Run "rate-limit"
+        checkSession   = Should-Run "session"
         needsZap       = $runAdmin -or $runCustomer -or $runUnauth -or $runInvalid -or $passiveOnly
         filteredRules  = $filteredRules
     }
@@ -132,16 +139,17 @@ function Build-AutomationYaml {
         [string]$BaseUrl, [string]$AdminToken, [string]$CustomerToken,
         [string]$ReportTimestamp,
         [bool]$RunAdmin, [bool]$RunCustomer, [bool]$RunUnauth, [bool]$RunInvalidToken,
-        [bool]$PassiveOnly, [array]$FilteredRules
+        [bool]$PassiveOnly, [array]$FilteredRules, [bool]$FuzzMode = $false
     )
     function Get-PolicyBlock {
+        $strength = if ($FuzzMode) { "Insane" } else { "Medium" }
         if ($FilteredRules -and $FilteredRules.Count -gt 0) {
             $ruleLines = ($FilteredRules | ForEach-Object {
-                "      - id: $($_.id)`n        name: `"$($_.name)`"`n        threshold: Medium`n        strength: Medium"
+                "      - id: $($_.id)`n        name: `"$($_.name)`"`n        threshold: Medium`n        strength: $strength"
             }) -join "`n"
-            return "    policyDefinition:`n      defaultStrength: Medium`n      defaultThreshold: Off`n      rules:`n$ruleLines"
+            return "    policyDefinition:`n      defaultStrength: $strength`n      defaultThreshold: Off`n      rules:`n$ruleLines"
         }
-        return "    policyDefinition:`n      defaultStrength: Medium`n      defaultThreshold: Medium"
+        return "    policyDefinition:`n      defaultStrength: $strength`n      defaultThreshold: Medium"
     }
     $policy = Get-PolicyBlock
     $L = [System.Collections.Generic.List[string]]::new()
@@ -316,6 +324,53 @@ $yaml = Build-AutomationYaml -BaseUrl "http://localhost:3000" -AdminToken "" -Cu
 Assert-NotContains "passive: no activeScan" $yaml "activeScan"
 Assert-Contains    "passive: has passiveScan-wait" $yaml "passiveScan-wait"
 Assert-Contains    "passive: has report-html"      $yaml "report-html"
+
+$p = Resolve-TestPlan "session"
+Assert-Equal "session -> checkSession" $p.checkSession $true
+Assert-Equal "session -> needsZap"     $p.needsZap     $false
+Assert-Equal "session -> runAdmin"     $p.runAdmin     $false
+
+Write-Host ""
+Write-Host "=== fuzz mode ===" -ForegroundColor Cyan
+
+$p = Resolve-TestPlan "fuzz"
+Assert-Equal "fuzz -> runAdmin"       $p.runAdmin       $true
+Assert-Equal "fuzz -> runCustomer"    $p.runCustomer    $true
+Assert-Equal "fuzz -> runUnauth"      $p.runUnauth      $false
+Assert-Equal "fuzz -> fuzzMode"       $p.fuzzMode       $true
+Assert-Equal "fuzz -> needsZap"       $p.needsZap       $true
+Assert-Equal "fuzz -> all injection rules count" $p.filteredRules.Count (5+6+1+2+1+1+1)  # all cats
+
+$p = Resolve-TestPlan "fuzz,sqli"
+Assert-Equal "fuzz,sqli -> fuzzMode"      $p.fuzzMode      $true
+Assert-Equal "fuzz,sqli -> rule count"    $p.filteredRules.Count 6   # only sqli
+
+$p = Resolve-TestPlan "fuzz,admin"
+Assert-Equal "fuzz,admin -> runAdmin"     $p.runAdmin      $true
+Assert-Equal "fuzz,admin -> runCustomer"  $p.runCustomer   $false
+Assert-Equal "fuzz,admin -> fuzzMode"     $p.fuzzMode      $true
+Assert-Equal "fuzz,admin -> all rules"    $p.filteredRules.Count (5+6+1+2+1+1+1)
+
+# YAML: fuzz mode uses Insane strength
+$p    = Resolve-TestPlan "fuzz"
+$yaml = Build-AutomationYaml -BaseUrl "http://localhost:3000" -AdminToken "tok" -CustomerToken "tok2" `
+    -ReportTimestamp "20260101-1200" -RunAdmin $p.runAdmin -RunCustomer $p.runCustomer `
+    -RunUnauth $p.runUnauth -RunInvalidToken $p.runInvalid -PassiveOnly $p.passiveOnly `
+    -FilteredRules $p.filteredRules -FuzzMode $p.fuzzMode
+Assert-Contains    "fuzz yaml: defaultStrength Insane"  $yaml "defaultStrength: Insane"
+Assert-Contains    "fuzz yaml: rule strength Insane"    $yaml "strength: Insane"
+Assert-NotContains "fuzz yaml: no Medium strength"      $yaml "strength: Medium"
+Assert-Contains    "fuzz yaml: has activeScan-admin"    $yaml "activeScan-admin"
+Assert-Contains    "fuzz yaml: has activeScan-customer" $yaml "activeScan-customer"
+
+# YAML: normal mode uses Medium strength
+$p    = Resolve-TestPlan "xss"
+$yaml = Build-AutomationYaml -BaseUrl "http://localhost:3000" -AdminToken "tok" -CustomerToken "tok2" `
+    -ReportTimestamp "20260101-1200" -RunAdmin $p.runAdmin -RunCustomer $p.runCustomer `
+    -RunUnauth $p.runUnauth -RunInvalidToken $p.runInvalid -PassiveOnly $p.passiveOnly `
+    -FilteredRules $p.filteredRules -FuzzMode $p.fuzzMode
+Assert-Contains    "xss yaml: defaultStrength Medium"   $yaml "defaultStrength: Medium"
+Assert-NotContains "xss yaml: no Insane strength"       $yaml "strength: Insane"
 
 # ---------------------------------------------------------------------------
 Write-Host ""

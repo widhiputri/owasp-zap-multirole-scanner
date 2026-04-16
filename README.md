@@ -121,8 +121,12 @@ Use `-Tests` to run only specific checks instead of the full scan:
 | `invalid-token` | Expired/invalid token active scan (all rules) |
 | `auth-bypass` | Alias for `unauth` + `invalid-token` |
 | `passive` | Passive scan only, no active scan |
+| `fuzz` | All injection rules at **Insane** strength — more payloads per rule, significantly slower |
+| `session` | Session management: token-after-logout, concurrent sessions, JWT signature tamper |
 
 Rule tests (`xss`, `sqli`, etc.) default to admin + customer phases. Add a phase name to restrict scope: `-Tests "xss,admin"`.
+
+`fuzz` can be combined with specific rule categories or phases: `-Tests "fuzz,sqli"` runs SQLi at Insane strength; `-Tests "fuzz,admin"` runs all injection rules at Insane strength on the admin phase only.
 
 ### Scan visibility
 

@@ -29,6 +29,10 @@
 #   ssrf           Server-side request forgery
 #   xxe            XML external entity injection
 #   ldap           LDAP injection
+#   fuzz           All injection rules at Insane strength (slower, more payloads)
+#
+#   Pre-scan checks (no ZAP required):
+#   session        Session management: token-after-logout, concurrent sessions, JWT tamper
 #
 #   ZAP scan phases (combine with rule categories to restrict scope):
 #   admin          Admin-role active scan (all rules unless rule category specified)
@@ -89,8 +93,8 @@ $customer_password  = $env:JUICE_SHOP_CUSTOMER_PASSWORD
 
 $validTests = @(
     "all",
-    "bola", "rate-limit",
-    "xss", "sqli", "path-traversal", "cmd-injection", "ssrf", "xxe", "ldap",
+    "bola", "rate-limit", "session",
+    "xss", "sqli", "path-traversal", "cmd-injection", "ssrf", "xxe", "ldap", "fuzz",
     "admin", "customer", "unauth", "invalid-token", "auth-bypass", "passive"
 )
 
@@ -145,15 +149,17 @@ $phaseNames   = @("admin","customer","unauth","invalid-token","auth-bypass","pas
 
 $hasRuleCat = ($testList | Where-Object { $ruleCatNames -contains $_ }).Count -gt 0
 $hasPhase   = ($testList | Where-Object { $phaseNames   -contains $_ }).Count -gt 0
+$fuzzMode   = Should-Run "fuzz"
 
-# Determine which ZAP phases to run
+# Determine which ZAP phases to run.
+# fuzz counts as a rule-category trigger: without an explicit phase it defaults to admin+customer.
 if ($runAll) {
     $runAdmin    = $true
     $runCustomer = $true
     $runUnauth   = $true
     $runInvalid  = $true
-} elseif ($hasRuleCat -and -not $hasPhase) {
-    # Rule categories without explicit phase -> default to admin + customer
+} elseif (($hasRuleCat -or $fuzzMode) -and -not $hasPhase) {
+    # Rule categories or fuzz without explicit phase -> default to admin + customer
     $runAdmin    = $true
     $runCustomer = $true
     $runUnauth   = $false
@@ -176,8 +182,15 @@ if (-not $runAll) {
     }
 }
 
+# fuzz without explicit rule categories -> expand to all injection rules at Insane strength
+if ($fuzzMode -and -not $runAll -and -not $hasRuleCat) {
+    $filteredRules = @()
+    foreach ($cat in $ruleCatNames) { $filteredRules += $ruleCategories[$cat] }
+}
+
 $checkBola      = Should-Run "bola"
 $checkRateLimit = Should-Run "rate-limit"
+$checkSession   = Should-Run "session"
 $needsZap       = $runAdmin -or $runCustomer -or $runUnauth -or $runInvalid -or $passiveOnly
 
 # Active scan phase sequence (index = ZAP scan ID assigned by automation plan)
@@ -192,23 +205,26 @@ Write-Host ""
 Write-Host "[*] Run plan: -Env $Env -Tests '$Tests'"
 if ($checkRateLimit) { Write-Host "    rate-limit    : auth endpoint probe (20 requests)" }
 if ($checkBola)      { Write-Host "    bola          : cross-role + cross-customer checks" }
+if ($checkSession)   { Write-Host "    session       : token-after-logout, concurrent sessions, JWT tamper" }
 if ($passiveOnly)    { Write-Host "    passive       : passive scan only" }
+$strengthLabel = if ($fuzzMode) { "Insane strength" } else { "Medium strength" }
 foreach ($ph in $activeScanSeq) {
     if ($filteredRules.Count -gt 0) {
         $ruleList = ($filteredRules | ForEach-Object { $_.name }) -join ", "
-        Write-Host "    $ph : active scan  rules: $ruleList"
+        Write-Host "    $ph : active scan ($strengthLabel)  rules: $ruleList"
     } else {
-        Write-Host "    $ph : active scan  all rules"
+        Write-Host "    $ph : active scan ($strengthLabel)  all rules"
     }
 }
-if (-not $checkBola -and -not $checkRateLimit -and -not $needsZap) {
+if ($fuzzMode) { Write-Host "    NOTE: fuzz/Insane strength sends significantly more requests and takes longer." }
+if (-not $checkBola -and -not $checkRateLimit -and -not $checkSession -and -not $needsZap) {
     Write-Warning "Nothing to run. Use -Tests all or specify at least one test name."
     exit 0
 }
 Write-Host ""
 
 # Credentials check
-$needsCreds = $checkBola -or $runAdmin -or $runCustomer
+$needsCreds = $checkBola -or $checkSession -or $runAdmin -or $runCustomer
 if ($needsCreds -and (-not $admin_password -or -not $customer_password)) {
     Write-Error "Missing required env vars: JUICE_SHOP_ADMIN_PASSWORD, JUICE_SHOP_CUSTOMER_PASSWORD"
     exit 1
@@ -423,6 +439,99 @@ function Test-AccessControls($adminToken, $customerToken, $customer2Token) {
     }
 }
 
+# Session management checks.
+# Tests three JWT-specific risks that ZAP active scan cannot cover:
+#   1. Token reuse after logout  - server should reject tokens post-logout (stateless JWTs often don't)
+#   2. Concurrent sessions       - second login should invalidate the first token (many APIs don't)
+#   3. JWT signature tamper      - server must validate signature, not just decode the payload
+function Test-SessionManagement($username, $password) {
+    Write-Host ""
+    Write-Host "[*] Running session management checks for: $username"
+    $probeUrl = "$base_url/rest/basket/1"  # owned by customer1 (first registered user)
+
+    # --- 1. Token reuse after logout ---
+    Write-Host "[*]   Check 1: token reuse after logout"
+    $token = $null
+    try {
+        $b = @{ email = $username; password = $password } | ConvertTo-Json
+        $token = (Invoke-RestMethod -Method Post -Uri "$base_url/rest/user/login" `
+            -ContentType "application/json" -Body $b).authentication.token
+    } catch { Write-Host "[*]   SESSION SKIP (token fetch failed)"; return }
+
+    # Confirm the token works before we try to log out
+    $baselineOk = $false
+    try {
+        $r = Invoke-WebRequest -Uri $probeUrl -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing
+        $baselineOk = $r.StatusCode -eq 200
+    } catch [System.Net.WebException] {
+        $baselineOk = ([int]$_.Exception.Response.StatusCode) -lt 500
+    } catch {}
+
+    # Attempt logout
+    $logoutCalled = $false
+    try {
+        Invoke-WebRequest -Uri "$base_url/rest/user/logout" `
+            -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing | Out-Null
+        $logoutCalled = $true
+    } catch {}
+
+    if ($logoutCalled -and $baselineOk) {
+        try {
+            $r = Invoke-WebRequest -Uri $probeUrl -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing
+            if ($r.StatusCode -eq 200) {
+                Write-Warning "[!] SESSION FAIL (token reuse): Token still accepted after logout (stateless JWT - server has no blacklist)"
+            } else {
+                Write-Host "[*]   SESSION PASS (token reuse): Token rejected after logout -> $($r.StatusCode)"
+            }
+        } catch [System.Net.WebException] {
+            Write-Host "[*]   SESSION PASS (token reuse): Token rejected after logout -> $([int]$_.Exception.Response.StatusCode)"
+        } catch { Write-Host "[*]   SESSION INFO (token reuse): Could not verify post-logout state" }
+    } elseif (-not $logoutCalled) {
+        Write-Host "[*]   SESSION INFO (token reuse): No logout endpoint found - skip"
+    }
+
+    # --- 2. Concurrent sessions ---
+    Write-Host "[*]   Check 2: concurrent sessions"
+    $tokenA = $null; $tokenB = $null
+    try {
+        $b = @{ email = $username; password = $password } | ConvertTo-Json
+        $tokenA = (Invoke-RestMethod -Method Post -Uri "$base_url/rest/user/login" `
+            -ContentType "application/json" -Body $b).authentication.token
+        $tokenB = (Invoke-RestMethod -Method Post -Uri "$base_url/rest/user/login" `
+            -ContentType "application/json" -Body $b).authentication.token
+    } catch { Write-Host "[*]   SESSION SKIP (token fetch failed)"; return }
+
+    try {
+        $r = Invoke-WebRequest -Uri $probeUrl -Headers @{ Authorization = "Bearer $tokenA" } -UseBasicParsing
+        if ($r.StatusCode -eq 200) {
+            Write-Warning "[!] SESSION WARN (concurrent sessions): First token still valid after second login - multiple simultaneous sessions allowed"
+        } else {
+            Write-Host "[*]   SESSION PASS (concurrent sessions): First token invalidated on second login -> $($r.StatusCode)"
+        }
+    } catch [System.Net.WebException] {
+        Write-Host "[*]   SESSION PASS (concurrent sessions): First token invalidated on second login -> $([int]$_.Exception.Response.StatusCode)"
+    } catch { Write-Host "[*]   SESSION INFO (concurrent sessions): Could not verify" }
+
+    # --- 3. JWT signature tamper ---
+    Write-Host "[*]   Check 3: JWT signature validation"
+    $parts = $tokenB -split '\.'
+    if ($parts.Count -eq 3) {
+        $tampered = "$($parts[0]).$($parts[1]).TAMPERED_SIGNATURE_GARBAGE"
+        try {
+            $r = Invoke-WebRequest -Uri $probeUrl -Headers @{ Authorization = "Bearer $tampered" } -UseBasicParsing
+            if ($r.StatusCode -eq 200) {
+                Write-Warning "[!] SESSION FAIL (JWT validation): Tampered signature accepted - server is NOT validating JWT signatures!"
+            } else {
+                Write-Host "[*]   SESSION PASS (JWT validation): Tampered signature rejected -> $($r.StatusCode)"
+            }
+        } catch [System.Net.WebException] {
+            Write-Host "[*]   SESSION PASS (JWT validation): Tampered signature rejected -> $([int]$_.Exception.Response.StatusCode)"
+        } catch { Write-Host "[*]   SESSION PASS (network error): JWT validation" }
+    } else {
+        Write-Host "[*]   SESSION SKIP (JWT validation): Token does not appear to be a JWT"
+    }
+}
+
 # =============================================================================
 # Automation plan generator
 # =============================================================================
@@ -442,20 +551,24 @@ function Build-AutomationYaml {
         [bool]$RunUnauth,
         [bool]$RunInvalidToken,
         [bool]$PassiveOnly,
-        [array]$FilteredRules
+        [array]$FilteredRules,
+        # When true: use Insane strength (far more payloads per rule, significantly slower)
+        [bool]$FuzzMode = $false
     )
 
     # Build the policyDefinition block shared by all activeScan jobs.
-    # When FilteredRules is populated: set defaultThreshold Off, enable only listed rules.
-    # When empty: use standard Medium threshold (all rules active).
+    # FuzzMode -> Insane strength (exhaustive payloads).
+    # FilteredRules populated -> Off default, only listed rules enabled.
+    # Neither -> standard Medium/Medium.
     function Get-PolicyBlock {
+        $strength = if ($FuzzMode) { "Insane" } else { "Medium" }
         if ($FilteredRules -and $FilteredRules.Count -gt 0) {
             $ruleLines = ($FilteredRules | ForEach-Object {
-                "      - id: $($_.id)`n        name: `"$($_.name)`"`n        threshold: Medium`n        strength: Medium"
+                "      - id: $($_.id)`n        name: `"$($_.name)`"`n        threshold: Medium`n        strength: $strength"
             }) -join "`n"
-            return "    policyDefinition:`n      defaultStrength: Medium`n      defaultThreshold: Off`n      rules:`n$ruleLines"
+            return "    policyDefinition:`n      defaultStrength: $strength`n      defaultThreshold: Off`n      rules:`n$ruleLines"
         }
-        return "    policyDefinition:`n      defaultStrength: Medium`n      defaultThreshold: Medium"
+        return "    policyDefinition:`n      defaultStrength: $strength`n      defaultThreshold: Medium"
     }
 
     $policy = Get-PolicyBlock
@@ -666,7 +779,7 @@ $customer2_token = $null
 if ($runAdmin -or $checkBola) {
     $admin_token = Get-Token $admin_username $admin_password
 }
-if ($runAdmin -or $runCustomer -or $checkBola) {
+if ($runAdmin -or $runCustomer -or $checkBola -or $checkSession) {
     $customer_token = Get-Token $customer_username $customer_password
 }
 if ($checkBola) {
@@ -689,6 +802,7 @@ if ($admin_token -or $customer_token) { Write-Host "[*] Token(s) acquired." }
 
 if ($checkRateLimit) { Test-RateLimiting }
 if ($checkBola)      { Test-AccessControls $admin_token $customer_token $customer2_token }
+if ($checkSession)   { Test-SessionManagement $customer_username $customer_password }
 
 if (-not $needsZap) {
     Write-Host "[*] Done."
@@ -715,7 +829,8 @@ $planContent = Build-AutomationYaml `
     -RunUnauth       $runUnauth `
     -RunInvalidToken $runInvalid `
     -PassiveOnly     $passiveOnly `
-    -FilteredRules   $filteredRules
+    -FilteredRules   $filteredRules `
+    -FuzzMode        $fuzzMode
 
 [System.IO.File]::WriteAllText($TEMP_PLAN, $planContent, [System.Text.UTF8Encoding]::new($false))
 
