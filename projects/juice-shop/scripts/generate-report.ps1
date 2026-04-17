@@ -134,14 +134,14 @@ function EscHtml($text) {
 }
 
 function Get-CweBadge($id) {
-    if (-not $id -or $id -eq '0') { return '' }
+    if (-not $id -or $id -eq '0' -or [int]$id -lt 1) { return '' }
     $name    = if ($cweNames.ContainsKey($id)) { $cweNames[$id] } else { 'See MITRE for details' }
     $tooltip = "CWE-${id}: $name"
     return "<a class='badge meta-badge' href='https://cwe.mitre.org/data/definitions/${id}.html' target='_blank' rel='noopener' title='$tooltip'>CWE-${id}</a>"
 }
 
 function Get-WascBadge($id) {
-    if (-not $id -or $id -eq '0') { return '' }
+    if (-not $id -or $id -eq '0' -or [int]$id -lt 1) { return '' }
     $name    = if ($wascNames.ContainsKey($id)) { $wascNames[$id] } else { 'Web Application Security Consortium category' }
     $tooltip = "WASC-${id}: $name"
     return "<span class='badge meta-badge' title='$tooltip'>WASC-${id}</span>"
