@@ -357,64 +357,73 @@ function Show-ScanProgress($phaseIdx, $phaseSeq) {
 #   Yellow = 4xx  (request blocked / access denied)
 #   Red    = 5xx  (server error on the payload — strong finding signal)
 #
-# Tracks a running message-count cursor so each call only shows new traffic,
-# not everything from the beginning of the scan.
-$script:lastShownMsgCount = 0
+# Tracks by message ID (not total count) so it correctly detects new traffic
+# even when ZAP recycles history slots during the active scan.
+# Falls back to showing the last few messages when no new IDs are found,
+# so there is always something visible every poll.
+$script:lastShownMsgId = 0
+
+function Show-MessageLine($m) {
+    try {
+        $reqLine = ($m.requestHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
+        $parts   = $reqLine -split ' '
+        $method  = $parts[0].PadRight(4)
+        $path    = if ($parts.Count -gt 1) { $parts[1] } else { "?" }
+        if ($path.Length -gt 55) { $path = $path.Substring(0, 52) + "..." }
+
+        $statusLine = ($m.responseHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
+        $status     = if ($statusLine -match ' (\d{3}) ') { $matches[1] } else { "---" }
+
+        $color = if    ($status -match '^2') { "Green"  } `
+                 elseif ($status -match '^3') { "Cyan"   } `
+                 elseif ($status -match '^4') { "Yellow" } `
+                 elseif ($status -match '^5') { "Red"    } `
+                 else                         { "Gray"   }
+
+        $body    = $m.requestBody
+        $bodyStr = ""
+        if ($body -and $body.Trim().Length -gt 0) {
+            $b       = $body.Trim() -replace '\s+', ' '
+            $bodyStr = "  " + (if ($b.Length -gt 55) { $b.Substring(0, 52) + "..." } else { $b })
+        }
+
+        Write-Host "             [$status] $method $($path.PadRight(55))$bodyStr" -ForegroundColor $color
+    } catch {}
+}
 
 function Show-RecentRequests {
     try {
         $total = [int](Invoke-ZapApi "/JSON/core/view/numberOfMessages/").numberOfMessages
         if ($total -eq 0) { return }
 
-        $newCount = $total - $script:lastShownMsgCount
-        if ($newCount -le 0) { return }
-
-        # Show up to 8 of the newest messages; note how many were skipped
-        $showCount = [Math]::Min($newCount, 8)
-        $start     = $total - $showCount
+        # Fetch the most recent batch to find new messages by ID
+        $fetchCount = [Math]::Min($total, 20)
+        $start      = [Math]::Max(0, $total - $fetchCount)
 
         $msgs = @((Invoke-ZapApi "/JSON/core/view/messages/" @{
-            start = "$start"; count = "$showCount"
+            start = "$start"; count = "$fetchCount"
         }).messages)
 
-        if ($msgs.Count -eq 0) { return }
+        if (-not $msgs -or $msgs.Count -eq 0) { return }
 
-        $skippedNote = if ($newCount -gt $showCount) { " (showing last $showCount of $newCount)" } else { "" }
-        Write-Host "           Requests : $newCount new$skippedNote"
+        # Separate truly new messages (ID not yet shown) from already-seen ones
+        $newMsgs = @($msgs | Where-Object { [int]$_.id -gt $script:lastShownMsgId })
 
-        foreach ($m in $msgs) {
-            try {
-                # Parse "METHOD /path HTTP/1.1" from first line of request header
-                $reqLine = ($m.requestHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
-                $parts   = $reqLine -split ' '
-                $method  = $parts[0].PadRight(4)
-                $path    = if ($parts.Count -gt 1) { $parts[1] } else { "?" }
-                if ($path.Length -gt 55) { $path = $path.Substring(0, 52) + "..." }
+        if ($newMsgs.Count -gt 0) {
+            # Update cursor to the highest ID we've now seen
+            $maxId = ($newMsgs | ForEach-Object { [int]$_.id } | Measure-Object -Maximum).Maximum
+            $script:lastShownMsgId = $maxId
 
-                # Parse status code from first line of response header
-                $statusLine = ($m.responseHeader -split "[\r\n]+" | Where-Object { $_ -ne '' })[0]
-                $status     = if ($statusLine -match ' (\d{3}) ') { $matches[1] } else { "---" }
-
-                # Color by response status
-                $color = if    ($status -match '^2') { "Green"  } `
-                         elseif ($status -match '^3') { "Cyan"   } `
-                         elseif ($status -match '^4') { "Yellow" } `
-                         elseif ($status -match '^5') { "Red"    } `
-                         else                         { "Gray"   }
-
-                # Request body snippet (shows the actual payload being tested)
-                $body    = $m.requestBody
-                $bodyStr = ""
-                if ($body -and $body.Trim().Length -gt 0) {
-                    $b       = $body.Trim() -replace '\s+', ' '
-                    $bodyStr = "  " + (if ($b.Length -gt 55) { $b.Substring(0, 52) + "..." } else { $b })
-                }
-
-                Write-Host "             [$status] $method $($path.PadRight(55))$bodyStr" -ForegroundColor $color
-            } catch {}
+            $toShow  = @($newMsgs | Select-Object -Last 8)
+            $extra   = $newMsgs.Count - $toShow.Count
+            $note    = if ($extra -gt 0) { " ($($newMsgs.Count) new, showing last 8)" } else { " ($($newMsgs.Count) new)" }
+            Write-Host "           Requests : $total total$note"
+            foreach ($m in $toShow) { Show-MessageLine $m }
+        } else {
+            # No new IDs this poll — show the last 3 to confirm ZAP is still active
+            Write-Host "           Requests : $total total  (no new since last poll)"
+            foreach ($m in ($msgs | Select-Object -Last 3)) { Show-MessageLine $m }
         }
-
-        $script:lastShownMsgCount = $total
     } catch {}
 }
 
