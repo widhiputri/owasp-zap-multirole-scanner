@@ -153,7 +153,16 @@ Rule tests (`xss`, `sqli`, etc.) default to admin + customer phases. Add a phase
            Progress : [==============------] 72%
            Alerts   : High=3  Medium=8  Low=5  Info=0
            Running  : SQL Injection (45 req) [2 alerts]  |  Path Traversal (12 req)
+           Requests : 312 total (6 new)
+             [200] POST /rest/user/login
+             [500] GET  /rest/products/search?q=1'--
+             [200] GET  /api/Products/1
+             [403] GET  /rest/user/whoami
+             [200] PUT  /api/BasketItems/1
+             [404] GET  /rest/admin/application-configuration
 ```
+
+HTTP lines are color-coded: green = 2xx, cyan = 3xx, yellow = 4xx, red = 5xx. Up to 8 new requests are shown per poll.
 
 **Session save** — add `-SaveSession` to preserve the full ZAP session for inspection in the GUI:
 
